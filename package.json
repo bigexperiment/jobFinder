@@ -4,9 +4,10 @@
   "description": "Simple job scraping application",
   "main": "server.js",
   "dependencies": {
+    "@vercel/postgres": "^0.5.1",
     "express": "^4.18.2",
     "jsdom": "^26.0.0",
     "node-fetch": "^2.6.9",
-    "sqlite3": "^5.1.6"
+    "dotenv": "^16.0.3"
   }
 }

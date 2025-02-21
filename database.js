@@ -1,133 +1,110 @@
-const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('jobs.db');
+const { sql } = require('@vercel/postgres');
 
-// Initialize database
-function initDatabase() {
-    db.run(`
-        CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_serial TEXT UNIQUE,
-            title TEXT,
-            company_name TEXT,
-            location TEXT,
-            job_type TEXT,
-            salary_range TEXT,
-            link TEXT UNIQUE,
-            workday_url TEXT UNIQUE,
-            displayLink TEXT,
-            snippet TEXT,
-            published_date TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+async function initDatabase() {
+    try {
+        // Create jobs table if it doesn't exist
+        await sql`
+            CREATE TABLE IF NOT EXISTS jobs (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                company_name TEXT,
+                location TEXT,
+                job_type TEXT,
+                salary_range TEXT,
+                link TEXT UNIQUE,
+                workday_url TEXT,
+                display_link TEXT,
+                snippet TEXT,
+                published_date TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `;
+        console.log('Database initialized');
+    } catch (error) {
+        console.error('Error initializing database:', error);
+    }
 }
 
-// Save job to database
-function saveJob(job) {
-    return new Promise((resolve, reject) => {
-        const { 
-            title, 
-            companyName,
-            location,
-            jobType,
-            salaryRange,
-            link, 
-            workdayUrl,
-            displayLink, 
-            snippet, 
-            publishedDate 
-        } = job;
-
-        // Generate job serial (e.g., JOB-2024-0001)
-        const date = new Date();
-        const yearMonth = date.getFullYear();
-        
-        // Get the next serial number
-        db.get(
-            "SELECT MAX(CAST(SUBSTR(job_serial, -4) AS INTEGER)) as max_serial FROM jobs WHERE job_serial LIKE ?",
-            [`JOB-${yearMonth}-%`],
-            (err, row) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
-
-                const nextSerial = (row.max_serial || 0) + 1;
-                const jobSerial = `JOB-${yearMonth}-${String(nextSerial).padStart(4, '0')}`;
-
-                db.run(
-                    `INSERT OR IGNORE INTO jobs (
-                        job_serial, title, company_name, location, job_type, 
-                        salary_range, link, workday_url, displayLink, 
-                        snippet, published_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                        jobSerial, title, companyName, location, jobType,
-                        salaryRange, link, workdayUrl, displayLink,
-                        snippet, publishedDate
-                    ],
-                    (err) => {
-                        if (err) reject(err);
-                        else resolve();
-                    }
-                );
-            }
-        );
-    });
+async function saveJob(job) {
+    try {
+        await sql`
+            INSERT INTO jobs (
+                title, company_name, location, job_type, 
+                salary_range, link, workday_url, display_link, 
+                snippet, published_date
+            ) 
+            VALUES (
+                ${job.title}, ${job.companyName}, ${job.location}, ${job.jobType},
+                ${job.salaryRange}, ${job.link}, ${job.workdayUrl}, ${job.displayLink},
+                ${job.snippet}, ${job.publishedDate}
+            )
+            ON CONFLICT (link) DO NOTHING;
+        `;
+    } catch (error) {
+        console.error('Error saving job:', error);
+        throw error;
+    }
 }
 
-// Get all jobs with optional search
-function getJobs(searchTerm = '', page = 1, limit = 10) {
-    return new Promise((resolve, reject) => {
+async function getJobs(searchTerm = '', page = 1, limit = 10) {
+    try {
         const offset = (page - 1) * limit;
         
-        // First get total count for pagination
-        const countQuery = searchTerm
-            ? `SELECT COUNT(*) as total FROM jobs WHERE title LIKE ? OR company_name LIKE ? OR location LIKE ?`
-            : `SELECT COUNT(*) as total FROM jobs`;
+        // Get total count
+        let totalResult;
+        if (searchTerm) {
+            totalResult = await sql`
+                SELECT COUNT(*) as total 
+                FROM jobs 
+                WHERE title ILIKE ${`%${searchTerm}%`} 
+                   OR company_name ILIKE ${`%${searchTerm}%`} 
+                   OR location ILIKE ${`%${searchTerm}%`}
+            `;
+        } else {
+            totalResult = await sql`SELECT COUNT(*) as total FROM jobs`;
+        }
         
-        const searchPattern = `%${searchTerm}%`;
-        const countParams = searchTerm ? [searchPattern, searchPattern, searchPattern] : [];
-        
-        db.get(countQuery, countParams, (err, row) => {
-            if (err) {
-                reject(err);
-                return;
+        const total = totalResult.rows[0].total;
+        const totalPages = Math.ceil(total / limit);
+
+        // Get paginated results
+        let jobs;
+        if (searchTerm) {
+            jobs = await sql`
+                SELECT * FROM jobs 
+                WHERE title ILIKE ${`%${searchTerm}%`} 
+                   OR company_name ILIKE ${`%${searchTerm}%`} 
+                   OR location ILIKE ${`%${searchTerm}%`}
+                ORDER BY published_date DESC, created_at DESC 
+                LIMIT ${limit} OFFSET ${offset}
+            `;
+        } else {
+            jobs = await sql`
+                SELECT * FROM jobs 
+                ORDER BY published_date DESC, created_at DESC 
+                LIMIT ${limit} OFFSET ${offset}
+            `;
+        }
+
+        return {
+            jobs: jobs.rows,
+            pagination: {
+                total,
+                totalPages,
+                currentPage: page,
+                hasNext: page < totalPages,
+                hasPrev: page > 1,
+                limit
             }
-
-            const total = row.total;
-            const totalPages = Math.ceil(total / limit);
-
-            // Then get paginated results
-            const query = searchTerm
-                ? `SELECT * FROM jobs 
-                   WHERE title LIKE ? OR company_name LIKE ? OR location LIKE ? 
-                   ORDER BY published_date DESC, created_at DESC 
-                   LIMIT ? OFFSET ?`
-                : `SELECT * FROM jobs 
-                   ORDER BY published_date DESC, created_at DESC 
-                   LIMIT ? OFFSET ?`;
-            
-            const queryParams = searchTerm 
-                ? [searchPattern, searchPattern, searchPattern, limit, offset]
-                : [limit, offset];
-
-            db.all(query, queryParams, (err, rows) => {
-                if (err) reject(err);
-                else resolve({
-                    jobs: rows,
-                    pagination: {
-                        total,
-                        totalPages,
-                        currentPage: page,
-                        hasNext: page < totalPages,
-                        hasPrev: page > 1,
-                        limit
-                    }
-                });
-            });
-        });
-    });
+        };
+    } catch (error) {
+        console.error('Error getting jobs:', error);
+        throw error;
+    }
 }
 
-module.exports = { initDatabase, saveJob, getJobs }; 
+module.exports = {
+    initDatabase,
+    saveJob,
+    getJobs
+}; 

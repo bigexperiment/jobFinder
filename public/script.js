@@ -1,18 +1,58 @@
 document.addEventListener('DOMContentLoaded', () => {
+    
     const scrapeButton = document.getElementById('scrapeButton');
     const searchInput = document.getElementById('searchInput');
     const jobsList = document.getElementById('jobsList');
     const statusLogs = document.getElementById('statusLogs'); // Already exists in HTML
+    const pagination = document.getElementById('pagination');
+
+    // Add null checks before using elements
+    if (!scrapeButton || !searchInput || !jobsList || !pagination) {
+        console.error('Required DOM elements not found');
+        return;
+    }
 
     // Load jobs when page loads
     loadJobs();
 
-    // Scrape new jobs
+    // Add CSS class for loading state
+    const style = document.createElement('style');
+    style.textContent = `
+        .loading {
+            position: relative;
+            opacity: 0.8;
+            cursor: wait !important;
+        }
+        .loading:after {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            margin: auto;
+            border: 3px solid transparent;
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: loading-spinner 1s ease infinite;
+        }
+        @keyframes loading-spinner {
+            from { transform: rotate(0turn) }
+            to { transform: rotate(1turn) }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Update the scrape button click handler
     scrapeButton.addEventListener('click', async () => {
-        scrapeButton.classList.add('loading');
-        scrapeButton.disabled = true;
-        
         try {
+            // Disable button and show loading state
+            scrapeButton.disabled = true;
+            scrapeButton.classList.add('loading');
+            scrapeButton.innerHTML = '<span class="icon">⏳</span> Updating...';
+            
             const response = await fetch('/scrape');
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -29,36 +69,82 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Error:', error);
             showNotification('Failed to update jobs: ' + error.message, 'error');
         } finally {
-            scrapeButton.classList.remove('loading');
+            // Re-enable button and restore original state
             scrapeButton.disabled = false;
+            scrapeButton.classList.remove('loading');
+            scrapeButton.innerHTML = '<span class="icon">🔄</span> Update Jobs';
         }
     });
 
-    // Search jobs
+    // Search jobs with null check
     let debounceTimeout;
-    searchInput.addEventListener('input', () => {
-        clearTimeout(debounceTimeout);
-        debounceTimeout = setTimeout(() => {
-            loadJobs(searchInput.value);
-        }, 300);
-    });
+    if (searchInput) {
+        searchInput.addEventListener('input', () => {
+            clearTimeout(debounceTimeout);
+            debounceTimeout = setTimeout(() => {
+                loadJobs(searchInput.value);
+            }, 300);
+        });
+    }
 
-    // Add pagination event listeners
-    const pagination = document.getElementById('pagination');
-    pagination.querySelector('.prev-page').addEventListener('click', () => {
-        const currentPage = parseInt(pagination.dataset.currentPage) || 1;
-        if (currentPage > 1) {
-            loadJobs(searchInput.value, currentPage - 1);
-        }
-    });
+    // Add pagination event listeners with null checks
+    const prevButton = pagination?.querySelector('.prev-page');
+    const nextButton = pagination?.querySelector('.next-page');
 
-    pagination.querySelector('.next-page').addEventListener('click', () => {
-        const currentPage = parseInt(pagination.dataset.currentPage) || 1;
-        const totalPages = parseInt(pagination.dataset.totalPages) || 1;
-        if (currentPage < totalPages) {
-            loadJobs(searchInput.value, currentPage + 1);
+    if (prevButton) {
+        prevButton.addEventListener('click', () => {
+            const currentPage = parseInt(pagination.dataset.currentPage) || 1;
+            if (currentPage > 1) {
+                loadJobs(searchInput?.value || '', currentPage - 1);
+            }
+        });
+    }
+
+    if (nextButton) {
+        nextButton.addEventListener('click', () => {
+            const currentPage = parseInt(pagination.dataset.currentPage) || 1;
+            const totalPages = parseInt(pagination.dataset.totalPages) || 1;
+            if (currentPage < totalPages) {
+                loadJobs(searchInput?.value || '', currentPage + 1);
+            }
+        });
+    }
+
+    // Add rate limiting functionality
+    const DAILY_LIMIT = 100; // Adjust based on your quota
+    let queryCount = 0;
+    let lastReset = new Date().setHours(0,0,0,0);
+
+    function checkQuota() {
+        const now = new Date();
+        const today = now.setHours(0,0,0,0);
+        
+        // Reset counter if it's a new day
+        if (today > lastReset) {
+            queryCount = 0;
+            lastReset = today;
         }
-    });
+        
+        // Check if we're within quota
+        if (queryCount >= DAILY_LIMIT) {
+            throw new Error('Daily quota exceeded. Please try again tomorrow.');
+        }
+        
+        queryCount++;
+    }
+
+    // REMOVE any hardcoded API keys from your code
+    // Instead, load it from environment variables on your server side
+    async function searchWithQuota(searchTerm) {
+        try {
+            checkQuota();
+            const response = await fetch(`/api/search?q=${searchTerm}`);
+            return await response.json();
+        } catch (error) {
+            console.error('Search error:', error);
+            throw error;
+        }
+    }
 
     async function loadJobs(search = '', page = 1) {
         try {
@@ -68,12 +154,19 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const data = await response.json();
             
-            displayJobs(data.jobs);
-            updatePagination(data.pagination);
+            if (jobsList) displayJobs(data.jobs);
+            if (pagination) updatePagination(data.pagination);
             
-            // Update total jobs count
-            document.getElementById('totalJobs').textContent = data.pagination.total;
-            document.getElementById('jobsCount').textContent = `${data.jobs.length} of ${data.pagination.total} jobs`;
+            // Update total jobs count with null checks
+            const totalJobsElement = document.getElementById('totalJobs');
+            const jobsCountElement = document.getElementById('jobsCount');
+            
+            if (totalJobsElement) {
+                totalJobsElement.textContent = data.pagination.total;
+            }
+            if (jobsCountElement) {
+                jobsCountElement.textContent = `${data.jobs.length} of ${data.pagination.total} jobs`;
+            }
         } catch (error) {
             console.error('Error loading jobs:', error);
             showNotification('Error loading jobs: ' + error.message, 'error');

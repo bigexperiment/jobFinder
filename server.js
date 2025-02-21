@@ -1,5 +1,6 @@
 const express = require('express');
 const fetch = require('node-fetch');
+require('dotenv').config(); // This is the correct way to load dotenv
 const { initDatabase, saveJob, getJobs } = require('./database');
 // const { JSDOM } = require('jsdom'); // Will use this later for Workday scraping
 
@@ -176,7 +177,7 @@ app.get('/scrape', async (req, res) => {
         // Fetch all pages
         for (let i = 0; i < numPages; i++) {
             const startIndex = i * 10 + 1; // Google's pagination starts at 1
-            const apiUrl = `https://www.googleapis.com/customsearch/v1?key=AIzaSyAyauXvGVLrdZjJTBz9UumLaWYeq-2bjAU&cx=e180cd071c7b94b1c&q=java+developer+jobs&start=${startIndex}`;
+            const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${process.env.GOOGLE_API_KEY}&cx=e180cd071c7b94b1c&q=java+developer+jobs&start=${startIndex}`;
             
             console.log(`\nFetching page ${i + 1}/${numPages} from Google API...`);
             const response = await fetch(apiUrl);
